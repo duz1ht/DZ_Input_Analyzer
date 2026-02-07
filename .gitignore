@@ -63,6 +63,4 @@ obs-studio/plugins/vlc-video/
 obs-studio/plugins/win-capture/
 obs-studio/plugins/win-dshow/
 obs-studio/plugins/win-wasapi/
-obs-studio/plugins/CMakeLists.txt    
-
-
+obs-studio/plugins/CMakeLists.txt
