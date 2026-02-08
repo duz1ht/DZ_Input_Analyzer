@@ -115,6 +115,8 @@ static inline int vkey_to_row(const dz_source_data *d, uint16_t vkey)
 	return -1;
 }
 
+static float dz_visible_height(const dz_source_data *d);
+
 struct dz_key_option {
 	uint16_t vkey;
 	const char *name;
@@ -196,6 +198,40 @@ static std::string dz_key_title(uint16_t vkey)
 	std::string title = "Key ";
 	title += dz_key_name(vkey);
 	return title;
+}
+
+static std::string dz_key_label(uint16_t vkey)
+{
+	switch (vkey) {
+	case VK_LEFT:
+		return "LFT";
+	case VK_RIGHT:
+		return "RGT";
+	case VK_UP:
+		return "UP";
+	case VK_DOWN:
+		return "DWN";
+	case VK_SPACE:
+		return "SPC";
+	case VK_RETURN:
+		return "ENT";
+	case VK_SHIFT:
+		return "SHF";
+	case VK_CONTROL:
+		return "CTL";
+	default:
+		break;
+	}
+
+	const char *name = dz_key_name(vkey);
+	if (!name)
+		return "UNK";
+
+	const size_t len = strlen(name);
+	if (len <= 3)
+		return name;
+
+	return std::string(name, 3);
 }
 
 // ------------------------------------------------------------
@@ -698,7 +734,11 @@ static uint32_t dz_source_get_width(void *data)
 static uint32_t dz_source_get_height(void *data)
 {
 	auto *d = (dz_source_data *)data;
-	return d ? d->height : 0;
+	if (!d)
+		return 0;
+
+	const float visible_h = dz_visible_height(d);
+	return (uint32_t)std::round(std::max(0.0f, visible_h));
 }
 
 static void dz_source_defaults(obs_data_t *settings)
@@ -858,6 +898,41 @@ static vec4 row_color(const dz_source_data *d, int row, float a)
 	return dz_col_from_obs_bgr(d->key_color[idx], a);
 }
 
+static float dz_base_row_height(const dz_source_data *d)
+{
+	if (!d)
+		return 0.0f;
+
+	const float H = (float)d->height;
+	const float topPad = 18.0f;
+	const float bottomPad = 55.0f;
+	const float rowGap = 20.0f;
+	const float rowsAreaH = H - topPad - bottomPad;
+	const float rowH = (rowsAreaH - rowGap * (ROW_COUNT - 1)) / (float)ROW_COUNT;
+	return std::max(0.0f, std::floor(rowH));
+}
+
+static float dz_visible_height(const dz_source_data *d)
+{
+	if (!d)
+		return 0.0f;
+
+	const float topPad = 18.0f;
+	const float bottomPad = 55.0f;
+	const float rowGap = 20.0f;
+	int visible_rows = 0;
+	for (int i = 0; i < ROW_COUNT; i++) {
+		if (d->row_enabled[i])
+			visible_rows++;
+	}
+
+	if (visible_rows <= 0)
+		return topPad + bottomPad;
+
+	const float rowH = dz_base_row_height(d);
+	return topPad + bottomPad + visible_rows * rowH + rowGap * (visible_rows - 1);
+}
+
 // Keep only last 30s like movv.html
 static void dz_cleanup_history(dz_source_data *d, int64_t t_now_ms)
 {
@@ -886,7 +961,7 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 	d->frame_counter++;
 
 	const float W = (float)d->width;
-	const float H = (float)d->height;
+	const float H = dz_visible_height(d);
 
 	gs_effect_t *solid = d->solid;
 
@@ -903,7 +978,7 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 	dz_draw_rect(solid, 0.0f, 0.0f, W, H, bg);
 
 	// Layout copied from movv.html draw()
-	const float leftPad = 70.0f;
+	const float leftPad = 70.0f * 1.3f;
 	const float rightPad = 20.0f;
 	const float topPad = 18.0f;
 	const float bottomPad = 55.0f;
@@ -912,7 +987,6 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 	const float timelineX1 = W - rightPad;
 	const float timelineW = timelineX1 - timelineX0;
 
-	const float rowsAreaH = H - topPad - bottomPad;
 	const float rowGap = 20.0f;
 	int visible_rows = 0;
 	for (int i = 0; i < ROW_COUNT; i++) {
@@ -920,9 +994,7 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 			visible_rows++;
 	}
 
-	const float rowH = (visible_rows > 0)
-			       ? std::floor((rowsAreaH - rowGap * (visible_rows - 1)) / (float)visible_rows)
-			       : 0.0f;
+	const float rowH = dz_base_row_height(d);
 
 	float rowYs[ROW_COUNT];
 	for (int i = 0; i < ROW_COUNT; i++)
@@ -974,15 +1046,16 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 		for (int i = 0; i < ROW_COUNT; i++) {
 			if (!d->row_enabled[i])
 				continue;
-			const char *label = dz_key_name(d->row_key_vkey[i]);
-			const size_t label_len = strlen(label);
-			float scale = 4.0f;
+			const std::string label_value = dz_key_label(d->row_key_vkey[i]);
+			const char *label = label_value.c_str();
+			const size_t label_len = label_value.size();
+			float scale = 4.0f * 0.85f;
 			if (label_len > 10)
-				scale = 3.0f;
+				scale = 3.0f * 0.85f;
 			if (label_len > 16)
-				scale = 2.0f;
+				scale = 2.0f * 0.85f;
 			const float yMid = rowYs[i] + rowH * 0.5f;
-				// Center the 5x7 block vertically around yMid
+			// Center the 5x7 block vertically around yMid
 			const float glyphH = 7.0f * std::floor(scale);
 			const float y = yMid - glyphH * 0.5f;
 			dz_draw_text_5x7(solid, 22.0f, y, label, scale, text);
