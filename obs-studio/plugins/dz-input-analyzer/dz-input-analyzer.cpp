@@ -17,11 +17,13 @@
 #include <deque>
 #include <chrono>
 #include <cmath>
+#include <string>
+#include <cstring>
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("dz-input-analyzer", "en-US")
 
-static const wchar_t *kWndClass = L"DZ_Input_Analyzer_RawInput_Wnd";
+static const wchar_t *kWndClass = L"DZ_Input_Analyzer_Window";
 
 // ------------------------------------------------------------
 // Timing helpers
@@ -48,7 +50,7 @@ struct dz_click_event {
 };
 
 struct dz_input_state {
-	std::atomic<uint8_t> key_w{0}, key_a{0}, key_s{0}, key_d{0};
+	std::atomic<uint8_t> key_down[ROW_COUNT]{{0}, {0}, {0}, {0}};
 	std::atomic<uint8_t> m1{0}, m2{0}, m3{0};
 
 	std::atomic<int> last_dx{0};
@@ -68,6 +70,8 @@ struct dz_source_data {
 
 	// Visual config
 	float bg_alpha = 0.55f;
+	bool row_enabled[ROW_COUNT] = {true, true, true, true};
+	uint16_t row_key_vkey[ROW_COUNT] = {'W', 'S', 'A', 'D'};
 
 	// Colors (OBS color picker gives BGR: 0x00BBGGRR)
 	uint32_t bg_color = 0x000000; // background RGB in OBS BGR encoding (default black)
@@ -81,7 +85,7 @@ struct dz_source_data {
 	// OBS effect
 	gs_effect_t *solid = nullptr;
 
-	// RawInput window
+	// Raw input window
 	HWND hwnd = nullptr;
 
 	// Input state (raw)
@@ -100,17 +104,98 @@ struct dz_source_data {
 	uint64_t frame_counter = 0;
 };
 
-static inline int vkey_to_row(uint16_t vkey)
+static inline int vkey_to_row(const dz_source_data *d, uint16_t vkey)
 {
-	if (vkey == 'W')
-		return ROW_W;
-	if (vkey == 'S')
-		return ROW_S;
-	if (vkey == 'A')
-		return ROW_A;
-	if (vkey == 'D')
-		return ROW_D;
+	if (!d)
+		return -1;
+	for (int i = 0; i < ROW_COUNT; i++) {
+		if (d->row_key_vkey[i] == vkey)
+			return i;
+	}
 	return -1;
+}
+
+struct dz_key_option {
+	uint16_t vkey;
+	const char *name;
+};
+
+static const dz_key_option kKeyOptions[] = {
+	{'A', "A"},
+	{'B', "B"},
+	{'C', "C"},
+	{'D', "D"},
+	{'E', "E"},
+	{'F', "F"},
+	{'G', "G"},
+	{'H', "H"},
+	{'I', "I"},
+	{'J', "J"},
+	{'K', "K"},
+	{'L', "L"},
+	{'M', "M"},
+	{'N', "N"},
+	{'O', "O"},
+	{'P', "P"},
+	{'Q', "Q"},
+	{'R', "R"},
+	{'S', "S"},
+	{'T', "T"},
+	{'U', "U"},
+	{'V', "V"},
+	{'W', "W"},
+	{'X', "X"},
+	{'Y', "Y"},
+	{'Z', "Z"},
+	{'0', "0"},
+	{'1', "1"},
+	{'2', "2"},
+	{'3', "3"},
+	{'4', "4"},
+	{'5', "5"},
+	{'6', "6"},
+	{'7', "7"},
+	{'8', "8"},
+	{'9', "9"},
+	{VK_LEFT, "LEFT ARROW"},
+	{VK_RIGHT, "RIGHT ARROW"},
+	{VK_UP, "UP ARROW"},
+	{VK_DOWN, "DOWN ARROW"},
+	{VK_SPACE, "SPACE"},
+	{VK_RETURN, "ENTER"},
+	{VK_TAB, "TAB"},
+	{VK_ESCAPE, "ESC"},
+	{VK_SHIFT, "SHIFT"},
+	{VK_CONTROL, "CTRL"},
+	{VK_MENU, "ALT"},
+	{VK_F1, "F1"},
+	{VK_F2, "F2"},
+	{VK_F3, "F3"},
+	{VK_F4, "F4"},
+	{VK_F5, "F5"},
+	{VK_F6, "F6"},
+	{VK_F7, "F7"},
+	{VK_F8, "F8"},
+	{VK_F9, "F9"},
+	{VK_F10, "F10"},
+	{VK_F11, "F11"},
+	{VK_F12, "F12"},
+};
+
+static const char *dz_key_name(uint16_t vkey)
+{
+	for (const auto &opt : kKeyOptions) {
+		if (opt.vkey == vkey)
+			return opt.name;
+	}
+	return "UNKNOWN";
+}
+
+static std::string dz_key_title(uint16_t vkey)
+{
+	std::string title = "Key ";
+	title += dz_key_name(vkey);
+	return title;
 }
 
 // ------------------------------------------------------------
@@ -197,35 +282,22 @@ static LRESULT CALLBACK dz_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 			const bool is_break = (k.Flags & RI_KEY_BREAK) != 0;
 			const uint16_t vkey = (uint16_t)k.VKey;
 
-			auto set_key = [&](std::atomic<uint8_t> &dst) {
-				dst.store(is_break ? 0 : 1, std::memory_order_relaxed);
-			};
+			const int row = vkey_to_row(d, vkey);
+			bool was_down = false;
+			if (row != -1) {
+				was_down = d->st.key_down[row].load(std::memory_order_relaxed) != 0;
+				d->st.key_down[row].store(is_break ? 0 : 1, std::memory_order_relaxed);
+			}
 
-			if (vkey == 'W')
-				set_key(d->st.key_w);
-			else if (vkey == 'A')
-				set_key(d->st.key_a);
-			else if (vkey == 'S')
-				set_key(d->st.key_s);
-			else if (vkey == 'D')
-				set_key(d->st.key_d);
-
-			// Timeline segments: only WASD
-			const int row = vkey_to_row(vkey);
+			// Timeline segments: only the 4 configured keys
 			if (row != -1) {
 				const int64_t t = now_ms();
 
 				if (!is_break) {
-					// keydown (ignore repeats by checking if already pressed)
-					bool already = (row == ROW_W && d->st.key_w.load(std::memory_order_relaxed)) ||
-						       (row == ROW_S && d->st.key_s.load(std::memory_order_relaxed)) ||
-						       (row == ROW_A && d->st.key_a.load(std::memory_order_relaxed)) ||
-						       (row == ROW_D && d->st.key_d.load(std::memory_order_relaxed));
+					// keydown (ignore repeats when already pressed)
+					bool already = was_down;
 
-					// Note: above check happens after set_key, so already is "pressed now".
-					// We want to avoid repeat. If it was already pressed before WM_INPUT, we can't know here,
-					// but RawInput typically does not spam like Win32 key repeat. Still, we can be conservative:
-					// start a segment only if we don't have an open segment for this row.
+					// Start a segment only if there is no open one for this row.
 					bool has_open = false;
 					for (auto it = d->segments.rbegin(); it != d->segments.rend(); ++it) {
 						if (it->row == row && it->end_ms < 0) {
@@ -233,14 +305,14 @@ static LRESULT CALLBACK dz_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 							break;
 						}
 					}
-					if (!has_open) {
+					if (!already && !has_open) {
 						d->segments.push_back({row, t, -1});
 						d->last_key_row.store(row, std::memory_order_relaxed);
 						d->last_key_down_ms.store(t, std::memory_order_relaxed);
 						d->last_key_valid.store(1, std::memory_order_relaxed);
 					}
 				} else {
-					// keyup: close latest open segment for that row
+					// keyup: close the latest open segment for this row
 					for (auto it = d->segments.rbegin(); it != d->segments.rend(); ++it) {
 						if (it->row == row && it->end_ms < 0) {
 							it->end_ms = t;
@@ -327,26 +399,114 @@ static void dz_draw_rect(gs_effect_t *solid, float x, float y, float w, float h,
 	gs_matrix_pop();
 }
 
-// Minimal bitmap font (5x7) for: W S A D 0..9 's'
+// Minimal bitmap font (5x7) for letters and numbers
 static uint8_t glyph_5x7(char ch, int row)
 {
 	// Each glyph: 7 rows of 5 bits (MSB left)
 	// Return bitmask for given row (0..6), bits in 0..4.
 	switch (ch) {
-	case 'W': {
-		static const uint8_t g[7] = {0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010};
+	case 'A': {
+		static const uint8_t g[7] = {0b00100, 0b01010, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001};
+		return g[row];
+	}
+	case 'B': {
+		static const uint8_t g[7] = {0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110};
+		return g[row];
+	}
+	case 'C': {
+		static const uint8_t g[7] = {0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110};
+		return g[row];
+	}
+	case 'D': {
+		static const uint8_t g[7] = {0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110};
+		return g[row];
+	}
+	case 'E': {
+		static const uint8_t g[7] = {0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111};
+		return g[row];
+	}
+	case 'F': {
+		static const uint8_t g[7] = {0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000};
+		return g[row];
+	}
+	case 'G': {
+		static const uint8_t g[7] = {0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110};
+		return g[row];
+	}
+	case 'H': {
+		static const uint8_t g[7] = {0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001};
+		return g[row];
+	}
+	case 'I': {
+		static const uint8_t g[7] = {0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110};
+		return g[row];
+	}
+	case 'J': {
+		static const uint8_t g[7] = {0b00111, 0b00010, 0b00010, 0b00010, 0b10010, 0b10010, 0b01100};
+		return g[row];
+	}
+	case 'K': {
+		static const uint8_t g[7] = {0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001};
+		return g[row];
+	}
+	case 'L': {
+		static const uint8_t g[7] = {0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111};
+		return g[row];
+	}
+	case 'M': {
+		static const uint8_t g[7] = {0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001};
+		return g[row];
+	}
+	case 'N': {
+		static const uint8_t g[7] = {0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001};
+		return g[row];
+	}
+	case 'O': {
+		static const uint8_t g[7] = {0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110};
+		return g[row];
+	}
+	case 'P': {
+		static const uint8_t g[7] = {0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000};
+		return g[row];
+	}
+	case 'Q': {
+		static const uint8_t g[7] = {0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101};
+		return g[row];
+	}
+	case 'R': {
+		static const uint8_t g[7] = {0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001};
 		return g[row];
 	}
 	case 'S': {
 		static const uint8_t g[7] = {0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110};
 		return g[row];
 	}
-	case 'A': {
-		static const uint8_t g[7] = {0b00100, 0b01010, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001};
+	case 'T': {
+		static const uint8_t g[7] = {0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100};
 		return g[row];
 	}
-	case 'D': {
-		static const uint8_t g[7] = {0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110};
+	case 'U': {
+		static const uint8_t g[7] = {0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110};
+		return g[row];
+	}
+	case 'V': {
+		static const uint8_t g[7] = {0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100};
+		return g[row];
+	}
+	case 'W': {
+		static const uint8_t g[7] = {0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010};
+		return g[row];
+	}
+	case 'X': {
+		static const uint8_t g[7] = {0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001};
+		return g[row];
+	}
+	case 'Y': {
+		static const uint8_t g[7] = {0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100};
+		return g[row];
+	}
+	case 'Z': {
+		static const uint8_t g[7] = {0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111};
 		return g[row];
 	}
 	case '0': {
@@ -390,10 +550,6 @@ static uint8_t glyph_5x7(char ch, int row)
 		static const uint8_t g[7] = {0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110};
 		return g[row];
 	}
-case 's': {
-		static const uint8_t g[7] = {0b00000, 0b00000, 0b01111, 0b10000, 0b01110, 0b00001, 0b11110};
-		return g[row];
-	}
 	default:
 		return 0;
 	}
@@ -429,6 +585,44 @@ static void dz_draw_text_5x7(gs_effect_t *solid, float x, float y, const char *t
 
 // ------------------------------------------------------------
 // OBS source
+static uint16_t dz_get_vkey(obs_data_t *settings, const char *name, uint16_t fallback)
+{
+	const int value = (int)obs_data_get_int(settings, name);
+	return value != 0 ? (uint16_t)value : fallback;
+}
+
+static void dz_fill_key_list(obs_property_t *list)
+{
+	for (const auto &opt : kKeyOptions)
+		obs_property_list_add_int(list, opt.name, opt.vkey);
+}
+
+static bool dz_on_key_modified(obs_properties_t *props, obs_property_t *property, obs_data_t *settings)
+{
+	const char *prop_name = obs_property_name(property);
+	const uint16_t vkey = (uint16_t)obs_data_get_int(settings, prop_name);
+	const char *group_id = nullptr;
+
+	if (strcmp(prop_name, "row_w_key") == 0)
+		group_id = "row_w_group";
+	else if (strcmp(prop_name, "row_s_key") == 0)
+		group_id = "row_s_group";
+	else if (strcmp(prop_name, "row_a_key") == 0)
+		group_id = "row_a_group";
+	else if (strcmp(prop_name, "row_d_key") == 0)
+		group_id = "row_d_group";
+
+	if (!group_id)
+		return true;
+
+	obs_property_t *group = obs_properties_get(props, group_id);
+	if (!group)
+		return true;
+
+	std::string title = dz_key_title(vkey);
+	obs_property_set_description(group, title.c_str());
+	return true;
+}
 static const char *dz_source_get_name(void *unused)
 {
 	UNUSED_PARAMETER(unused);
@@ -456,6 +650,14 @@ static void *dz_source_create(obs_data_t *settings, obs_source_t *source)
 	d->key_color[ROW_S] = (uint32_t)obs_data_get_int(settings, "color_s");
 	d->key_color[ROW_A] = (uint32_t)obs_data_get_int(settings, "color_a");
 	d->key_color[ROW_D] = (uint32_t)obs_data_get_int(settings, "color_d");
+	d->row_key_vkey[ROW_W] = dz_get_vkey(settings, "row_w_key", 'W');
+	d->row_key_vkey[ROW_S] = dz_get_vkey(settings, "row_s_key", 'S');
+	d->row_key_vkey[ROW_A] = dz_get_vkey(settings, "row_a_key", 'A');
+	d->row_key_vkey[ROW_D] = dz_get_vkey(settings, "row_d_key", 'D');
+	d->row_enabled[ROW_W] = obs_data_get_bool(settings, "row_w_enabled");
+	d->row_enabled[ROW_S] = obs_data_get_bool(settings, "row_s_enabled");
+	d->row_enabled[ROW_A] = obs_data_get_bool(settings, "row_a_enabled");
+	d->row_enabled[ROW_D] = obs_data_get_bool(settings, "row_d_enabled");
 
 	obs_enter_graphics();
 	d->solid = obs_get_base_effect(OBS_EFFECT_SOLID);
@@ -513,23 +715,77 @@ static void dz_source_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "color_s", 0x009cff9c); // #9cff9c
 	obs_data_set_default_int(settings, "color_a", 0x003f3fcf); // #cf3f3f
 	obs_data_set_default_int(settings, "color_d", 0x00c8a00a); // #0aa0c8
+
+	obs_data_set_default_int(settings, "row_w_key", 'W');
+	obs_data_set_default_int(settings, "row_s_key", 'S');
+	obs_data_set_default_int(settings, "row_a_key", 'A');
+	obs_data_set_default_int(settings, "row_d_key", 'D');
+
+	obs_data_set_default_bool(settings, "row_w_enabled", true);
+	obs_data_set_default_bool(settings, "row_s_enabled", true);
+	obs_data_set_default_bool(settings, "row_a_enabled", true);
+	obs_data_set_default_bool(settings, "row_d_enabled", true);
 }
 
 static obs_properties_t *dz_source_properties(void *data)
 {
-	UNUSED_PARAMETER(data);
-
+	auto *d = (dz_source_data *)data;
 	obs_properties_t *p = obs_properties_create();
 	obs_properties_add_int(p, "width", "Width", 16, 16384, 1);
 	obs_properties_add_int(p, "height", "Height", 16, 16384, 1);
 	obs_properties_add_float_slider(p, "bg_alpha", "Background Opacity", 0.0, 1.0, 0.01);
 
-obs_properties_add_color(p, "bg_color", "Background Color");
-obs_properties_add_color(p, "color_w", "Color W");
-obs_properties_add_color(p, "color_s", "Color S");
-obs_properties_add_color(p, "color_a", "Color A");
-obs_properties_add_color(p, "color_d", "Color D");
-return p;
+	obs_properties_add_color(p, "bg_color", "Background Color");
+
+	const uint16_t vkey_w = d ? d->row_key_vkey[ROW_W] : (uint16_t)'W';
+	const uint16_t vkey_s = d ? d->row_key_vkey[ROW_S] : (uint16_t)'S';
+	const uint16_t vkey_a = d ? d->row_key_vkey[ROW_A] : (uint16_t)'A';
+	const uint16_t vkey_d = d ? d->row_key_vkey[ROW_D] : (uint16_t)'D';
+
+	{
+		obs_properties_t *group = obs_properties_create();
+		obs_property_t *list = obs_properties_add_list(group, "row_w_key", "Monitored Key",
+								OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+		dz_fill_key_list(list);
+		obs_property_set_modified_callback(list, dz_on_key_modified);
+		obs_properties_add_color(group, "color_w", "Row Color");
+		obs_properties_add_bool(group, "row_w_enabled", "Show Row");
+		obs_properties_add_group(p, "row_w_group", dz_key_title(vkey_w).c_str(), OBS_GROUP_NORMAL, group);
+	}
+
+	{
+		obs_properties_t *group = obs_properties_create();
+		obs_property_t *list = obs_properties_add_list(group, "row_s_key", "Monitored Key",
+								OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+		dz_fill_key_list(list);
+		obs_property_set_modified_callback(list, dz_on_key_modified);
+		obs_properties_add_color(group, "color_s", "Row Color");
+		obs_properties_add_bool(group, "row_s_enabled", "Show Row");
+		obs_properties_add_group(p, "row_s_group", dz_key_title(vkey_s).c_str(), OBS_GROUP_NORMAL, group);
+	}
+
+	{
+		obs_properties_t *group = obs_properties_create();
+		obs_property_t *list = obs_properties_add_list(group, "row_a_key", "Monitored Key",
+								OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+		dz_fill_key_list(list);
+		obs_property_set_modified_callback(list, dz_on_key_modified);
+		obs_properties_add_color(group, "color_a", "Row Color");
+		obs_properties_add_bool(group, "row_a_enabled", "Show Row");
+		obs_properties_add_group(p, "row_a_group", dz_key_title(vkey_a).c_str(), OBS_GROUP_NORMAL, group);
+	}
+
+	{
+		obs_properties_t *group = obs_properties_create();
+		obs_property_t *list = obs_properties_add_list(group, "row_d_key", "Monitored Key",
+								OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+		dz_fill_key_list(list);
+		obs_property_set_modified_callback(list, dz_on_key_modified);
+		obs_properties_add_color(group, "color_d", "Row Color");
+		obs_properties_add_bool(group, "row_d_enabled", "Show Row");
+		obs_properties_add_group(p, "row_d_group", dz_key_title(vkey_d).c_str(), OBS_GROUP_NORMAL, group);
+	}
+	return p;
 }
 
 static void dz_source_update(void *data, obs_data_t *settings)
@@ -554,7 +810,20 @@ static void dz_source_update(void *data, obs_data_t *settings)
 	d->key_color[ROW_A] = (uint32_t)obs_data_get_int(settings, "color_a");
 	d->key_color[ROW_D] = (uint32_t)obs_data_get_int(settings, "color_d");
 
-	blog(LOG_INFO, "[dz-input-analyzer] update: %ux%u bg_alpha=%.2f bg_color=%06x W=%06x S=%06x A=%06x D=%06x",
+	d->row_key_vkey[ROW_W] = dz_get_vkey(settings, "row_w_key", 'W');
+	d->row_key_vkey[ROW_S] = dz_get_vkey(settings, "row_s_key", 'S');
+	d->row_key_vkey[ROW_A] = dz_get_vkey(settings, "row_a_key", 'A');
+	d->row_key_vkey[ROW_D] = dz_get_vkey(settings, "row_d_key", 'D');
+
+	d->row_enabled[ROW_W] = obs_data_get_bool(settings, "row_w_enabled");
+	d->row_enabled[ROW_S] = obs_data_get_bool(settings, "row_s_enabled");
+	d->row_enabled[ROW_A] = obs_data_get_bool(settings, "row_a_enabled");
+	d->row_enabled[ROW_D] = obs_data_get_bool(settings, "row_d_enabled");
+
+	for (int i = 0; i < ROW_COUNT; i++)
+		d->st.key_down[i].store(0, std::memory_order_relaxed);
+
+	blog(LOG_INFO, "[dz-input-analyzer] update: %ux%u opacity=%.2f bg_color=%06x W=%06x S=%06x A=%06x D=%06x",
 		d->width, d->height, d->bg_alpha,
 		(unsigned)(d->bg_color & 0xFFFFFF),
 		(unsigned)(d->key_color[ROW_W] & 0xFFFFFF),
@@ -645,11 +914,29 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 
 	const float rowsAreaH = H - topPad - bottomPad;
 	const float rowGap = 20.0f;
-	const float rowH = std::floor((rowsAreaH - rowGap * (ROW_COUNT - 1)) / (float)ROW_COUNT);
+	int visible_rows = 0;
+	for (int i = 0; i < ROW_COUNT; i++) {
+		if (d->row_enabled[i])
+			visible_rows++;
+	}
 
-	float rowYs[ROW_COUNT]{};
+	const float rowH = (visible_rows > 0)
+			       ? std::floor((rowsAreaH - rowGap * (visible_rows - 1)) / (float)visible_rows)
+			       : 0.0f;
+
+	float rowYs[ROW_COUNT];
 	for (int i = 0; i < ROW_COUNT; i++)
-		rowYs[i] = topPad + i * (rowH + rowGap);
+		rowYs[i] = -1.0f;
+
+	if (visible_rows > 0) {
+		int row_index = 0;
+		for (int i = 0; i < ROW_COUNT; i++) {
+			if (!d->row_enabled[i])
+				continue;
+			rowYs[i] = topPad + row_index * (rowH + rowGap);
+			row_index++;
+		}
+	}
 
 	// Time window (moving)
 	const int64_t tNow = now_ms();
@@ -681,22 +968,32 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 	}
 
 	
-// Row labels (W/S/A/D) big-ish using bitmap font
-	{
+	// Row labels using bitmap font
+	if (visible_rows > 0) {
 		vec4 text = dz_col_rgba(1.0f, 1.0f, 1.0f, 0.92f);
-		const float scale = 6.0f; // tweakable
-		const char *labels[ROW_COUNT] = {"W", "S", "A", "D"};
 		for (int i = 0; i < ROW_COUNT; i++) {
+			if (!d->row_enabled[i])
+				continue;
+			const char *label = dz_key_name(d->row_key_vkey[i]);
+			const size_t label_len = strlen(label);
+			float scale = 4.0f;
+			if (label_len > 10)
+				scale = 3.0f;
+			if (label_len > 16)
+				scale = 2.0f;
 			const float yMid = rowYs[i] + rowH * 0.5f;
-			// Center the 5x7 block vertically around yMid
+				// Center the 5x7 block vertically around yMid
 			const float glyphH = 7.0f * std::floor(scale);
 			const float y = yMid - glyphH * 0.5f;
-			dz_draw_text_5x7(solid, 22.0f, y, labels[i], scale, text);
+			dz_draw_text_5x7(solid, 22.0f, y, label, scale, text);
 		}
 	}
 
 	// Key segments (height 60% of rowH, sharp corners)
-	for (const auto &seg : d->segments) {
+	if (visible_rows > 0) {
+		for (const auto &seg : d->segments) {
+			if (!d->row_enabled[seg.row])
+				continue;
 		const int64_t end = (seg.end_ms < 0) ? tNow : seg.end_ms;
 
 		if (end < t0 || seg.start_ms > t1)
@@ -709,35 +1006,40 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 		float h = std::max(2.0f, std::round(rowH * 0.60f));
 		float y = rowYs[seg.row] + std::round((rowH - h) * 0.5f);
 
-		vec4 c = row_color(d, seg.row, 0.95f);
-		dz_draw_rect(solid, x0s, y, w, h, c);
+			vec4 c = row_color(d, seg.row, 0.95f);
+			dz_draw_rect(solid, x0s, y, w, h, c);
+		}
 	}
 
 	// Click markers + delta numbers
-for (const auto &c : d->clicks) {
-	if (c.time_ms < t0 || c.time_ms > t1)
-		continue;
+	if (visible_rows > 0) {
+		for (const auto &c : d->clicks) {
+			if (!d->row_enabled[c.row])
+				continue;
+			if (c.time_ms < t0 || c.time_ms > t1)
+				continue;
 
-	const float x = xOf(c.time_ms);
+			const float x = xOf(c.time_ms);
 
-	// Color + height are driven by the last key pressed before the click (c.row).
-	// One variable controls both the click line and the delta number color.
-	vec4 clickCol = row_color(d, c.row, 0.90f);
+			// Color + height are driven by the last key pressed before the click (c.row).
+			// One variable controls both the click line and the delta number color.
+			vec4 clickCol = row_color(d, c.row, 0.90f);
 
-	// Click line: starts at the TOP of the row of the last key, ends at the baseline.
-	const float y0 = rowYs[c.row];
-	const float h = std::max(2.0f, axisY2 - y0);
-	dz_draw_rect(solid, x, y0, 2.0f, h, clickCol);
+			// Click line: starts at the TOP of the row of the last key, ends at the baseline.
+			const float y0 = rowYs[c.row];
+			const float h = std::max(2.0f, axisY2 - y0);
+			dz_draw_rect(solid, x, y0, 2.0f, h, clickCol);
 
-	// Number near the row (same color as the click line)
-	const float scale = 3.0f;
+			// Number near the row (same color as the click line)
+			const float scale = 3.0f;
 
-	char buf[16]{};
-	_snprintf_s(buf, _TRUNCATE, "%d", c.delta_ms);
+			char buf[16]{};
+			_snprintf_s(buf, _TRUNCATE, "%d", c.delta_ms);
 
-	const float yText = rowYs[c.row] - 6.0f;
-	dz_draw_text_5x7(solid, x + 6.0f, yText + 0.1f, buf, scale, clickCol);
-}
+			const float yText = rowYs[c.row] - 6.0f;
+			dz_draw_text_5x7(solid, x + 6.0f, yText + 0.1f, buf, scale, clickCol);
+		}
+	}
 
 	// TIME axis line + ticks + labels 0s..5s
 	{
@@ -759,7 +1061,7 @@ for (const auto &c : d->clicks) {
 
 			char lab[4]{};
 			lab[0] = (char)('0' + i);
-			lab[1] = 's';
+			lab[1] = 'S';
 			lab[2] = 0;
 
 			dz_draw_text_5x7(solid, x - 10.0f, axisY + 10.0f, lab, 2.28f, tcol);
