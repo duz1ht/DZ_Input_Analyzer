@@ -68,6 +68,7 @@ struct dz_source_data {
 
 	// Visual config
 	float bg_alpha = 0.55f;
+	bool row_enabled[ROW_COUNT] = {true, true, true, true};
 
 	// Colors (OBS color picker gives BGR: 0x00BBGGRR)
 	uint32_t bg_color = 0x000000; // background RGB in OBS BGR encoding (default black)
@@ -456,6 +457,10 @@ static void *dz_source_create(obs_data_t *settings, obs_source_t *source)
 	d->key_color[ROW_S] = (uint32_t)obs_data_get_int(settings, "color_s");
 	d->key_color[ROW_A] = (uint32_t)obs_data_get_int(settings, "color_a");
 	d->key_color[ROW_D] = (uint32_t)obs_data_get_int(settings, "color_d");
+	d->row_enabled[ROW_W] = obs_data_get_bool(settings, "row_w_enabled");
+	d->row_enabled[ROW_S] = obs_data_get_bool(settings, "row_s_enabled");
+	d->row_enabled[ROW_A] = obs_data_get_bool(settings, "row_a_enabled");
+	d->row_enabled[ROW_D] = obs_data_get_bool(settings, "row_d_enabled");
 
 	obs_enter_graphics();
 	d->solid = obs_get_base_effect(OBS_EFFECT_SOLID);
@@ -513,6 +518,11 @@ static void dz_source_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "color_s", 0x009cff9c); // #9cff9c
 	obs_data_set_default_int(settings, "color_a", 0x003f3fcf); // #cf3f3f
 	obs_data_set_default_int(settings, "color_d", 0x00c8a00a); // #0aa0c8
+
+	obs_data_set_default_bool(settings, "row_w_enabled", true);
+	obs_data_set_default_bool(settings, "row_s_enabled", true);
+	obs_data_set_default_bool(settings, "row_a_enabled", true);
+	obs_data_set_default_bool(settings, "row_d_enabled", true);
 }
 
 static obs_properties_t *dz_source_properties(void *data)
@@ -524,12 +534,17 @@ static obs_properties_t *dz_source_properties(void *data)
 	obs_properties_add_int(p, "height", "Height", 16, 16384, 1);
 	obs_properties_add_float_slider(p, "bg_alpha", "Background Opacity", 0.0, 1.0, 0.01);
 
-obs_properties_add_color(p, "bg_color", "Background Color");
-obs_properties_add_color(p, "color_w", "Color W");
-obs_properties_add_color(p, "color_s", "Color S");
-obs_properties_add_color(p, "color_a", "Color A");
-obs_properties_add_color(p, "color_d", "Color D");
-return p;
+	obs_properties_add_color(p, "bg_color", "Background Color");
+	obs_properties_add_color(p, "color_w", "Color W");
+	obs_properties_add_color(p, "color_s", "Color S");
+	obs_properties_add_color(p, "color_a", "Color A");
+	obs_properties_add_color(p, "color_d", "Color D");
+
+	obs_properties_add_bool(p, "row_w_enabled", "Mostrar row W");
+	obs_properties_add_bool(p, "row_s_enabled", "Mostrar row S");
+	obs_properties_add_bool(p, "row_a_enabled", "Mostrar row A");
+	obs_properties_add_bool(p, "row_d_enabled", "Mostrar row D");
+	return p;
 }
 
 static void dz_source_update(void *data, obs_data_t *settings)
@@ -553,6 +568,11 @@ static void dz_source_update(void *data, obs_data_t *settings)
 	d->key_color[ROW_S] = (uint32_t)obs_data_get_int(settings, "color_s");
 	d->key_color[ROW_A] = (uint32_t)obs_data_get_int(settings, "color_a");
 	d->key_color[ROW_D] = (uint32_t)obs_data_get_int(settings, "color_d");
+
+	d->row_enabled[ROW_W] = obs_data_get_bool(settings, "row_w_enabled");
+	d->row_enabled[ROW_S] = obs_data_get_bool(settings, "row_s_enabled");
+	d->row_enabled[ROW_A] = obs_data_get_bool(settings, "row_a_enabled");
+	d->row_enabled[ROW_D] = obs_data_get_bool(settings, "row_d_enabled");
 
 	blog(LOG_INFO, "[dz-input-analyzer] update: %ux%u bg_alpha=%.2f bg_color=%06x W=%06x S=%06x A=%06x D=%06x",
 		d->width, d->height, d->bg_alpha,
@@ -645,11 +665,29 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 
 	const float rowsAreaH = H - topPad - bottomPad;
 	const float rowGap = 20.0f;
-	const float rowH = std::floor((rowsAreaH - rowGap * (ROW_COUNT - 1)) / (float)ROW_COUNT);
+	int visible_rows = 0;
+	for (int i = 0; i < ROW_COUNT; i++) {
+		if (d->row_enabled[i])
+			visible_rows++;
+	}
 
-	float rowYs[ROW_COUNT]{};
+	const float rowH = (visible_rows > 0)
+			       ? std::floor((rowsAreaH - rowGap * (visible_rows - 1)) / (float)visible_rows)
+			       : 0.0f;
+
+	float rowYs[ROW_COUNT];
 	for (int i = 0; i < ROW_COUNT; i++)
-		rowYs[i] = topPad + i * (rowH + rowGap);
+		rowYs[i] = -1.0f;
+
+	if (visible_rows > 0) {
+		int row_index = 0;
+		for (int i = 0; i < ROW_COUNT; i++) {
+			if (!d->row_enabled[i])
+				continue;
+			rowYs[i] = topPad + row_index * (rowH + rowGap);
+			row_index++;
+		}
+	}
 
 	// Time window (moving)
 	const int64_t tNow = now_ms();
@@ -682,11 +720,13 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 
 	
 // Row labels (W/S/A/D) big-ish using bitmap font
-	{
+	if (visible_rows > 0) {
 		vec4 text = dz_col_rgba(1.0f, 1.0f, 1.0f, 0.92f);
 		const float scale = 6.0f; // tweakable
 		const char *labels[ROW_COUNT] = {"W", "S", "A", "D"};
 		for (int i = 0; i < ROW_COUNT; i++) {
+			if (!d->row_enabled[i])
+				continue;
 			const float yMid = rowYs[i] + rowH * 0.5f;
 			// Center the 5x7 block vertically around yMid
 			const float glyphH = 7.0f * std::floor(scale);
@@ -696,7 +736,10 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 	}
 
 	// Key segments (height 60% of rowH, sharp corners)
-	for (const auto &seg : d->segments) {
+	if (visible_rows > 0) {
+		for (const auto &seg : d->segments) {
+			if (!d->row_enabled[seg.row])
+				continue;
 		const int64_t end = (seg.end_ms < 0) ? tNow : seg.end_ms;
 
 		if (end < t0 || seg.start_ms > t1)
@@ -709,35 +752,40 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 		float h = std::max(2.0f, std::round(rowH * 0.60f));
 		float y = rowYs[seg.row] + std::round((rowH - h) * 0.5f);
 
-		vec4 c = row_color(d, seg.row, 0.95f);
-		dz_draw_rect(solid, x0s, y, w, h, c);
+			vec4 c = row_color(d, seg.row, 0.95f);
+			dz_draw_rect(solid, x0s, y, w, h, c);
+		}
 	}
 
 	// Click markers + delta numbers
-for (const auto &c : d->clicks) {
-	if (c.time_ms < t0 || c.time_ms > t1)
-		continue;
+	if (visible_rows > 0) {
+		for (const auto &c : d->clicks) {
+			if (!d->row_enabled[c.row])
+				continue;
+			if (c.time_ms < t0 || c.time_ms > t1)
+				continue;
 
-	const float x = xOf(c.time_ms);
+			const float x = xOf(c.time_ms);
 
-	// Color + height are driven by the last key pressed before the click (c.row).
-	// One variable controls both the click line and the delta number color.
-	vec4 clickCol = row_color(d, c.row, 0.90f);
+			// Color + height are driven by the last key pressed before the click (c.row).
+			// One variable controls both the click line and the delta number color.
+			vec4 clickCol = row_color(d, c.row, 0.90f);
 
-	// Click line: starts at the TOP of the row of the last key, ends at the baseline.
-	const float y0 = rowYs[c.row];
-	const float h = std::max(2.0f, axisY2 - y0);
-	dz_draw_rect(solid, x, y0, 2.0f, h, clickCol);
+			// Click line: starts at the TOP of the row of the last key, ends at the baseline.
+			const float y0 = rowYs[c.row];
+			const float h = std::max(2.0f, axisY2 - y0);
+			dz_draw_rect(solid, x, y0, 2.0f, h, clickCol);
 
-	// Number near the row (same color as the click line)
-	const float scale = 3.0f;
+			// Number near the row (same color as the click line)
+			const float scale = 3.0f;
 
-	char buf[16]{};
-	_snprintf_s(buf, _TRUNCATE, "%d", c.delta_ms);
+			char buf[16]{};
+			_snprintf_s(buf, _TRUNCATE, "%d", c.delta_ms);
 
-	const float yText = rowYs[c.row] - 6.0f;
-	dz_draw_text_5x7(solid, x + 6.0f, yText + 0.1f, buf, scale, clickCol);
-}
+			const float yText = rowYs[c.row] - 6.0f;
+			dz_draw_text_5x7(solid, x + 6.0f, yText + 0.1f, buf, scale, clickCol);
+		}
+	}
 
 	// TIME axis line + ticks + labels 0s..5s
 	{
