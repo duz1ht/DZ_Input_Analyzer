@@ -17,14 +17,16 @@
 #include <deque>
 #include <chrono>
 #include <cmath>
+#include <string>
+#include <cstring>
 
 OBS_DECLARE_MODULE()
-OBS_MODULE_USE_DEFAULT_LOCALE("dz-input-analyzer", "en-US")
+OBS_MODULE_USE_DEFAULT_LOCALE("dz-input-analyzer", "pt-BR")
 
-static const wchar_t *kWndClass = L"DZ_Input_Analyzer_RawInput_Wnd";
+static const wchar_t *kWndClass = L"DZ_Analisador_Entrada_Janela";
 
 // ------------------------------------------------------------
-// Timing helpers
+// Utilitários de tempo
 static inline int64_t now_ms()
 {
 	using namespace std::chrono;
@@ -32,23 +34,23 @@ static inline int64_t now_ms()
 }
 
 // ------------------------------------------------------------
-// Timeline model (matches movv.html logic)
+// Modelo da linha do tempo (equivalente à lógica do movv.html)
 enum dz_row : int { ROW_W = 0, ROW_S = 1, ROW_A = 2, ROW_D = 3, ROW_COUNT = 4 };
 
 struct dz_key_segment {
 	int row = 0;          // 0..3
-	int64_t start_ms = 0; // absolute ms
-	int64_t end_ms = -1;  // -1 while pressed
+	int64_t start_ms = 0; // ms absoluto
+	int64_t end_ms = -1;  // -1 enquanto pressionado
 };
 
 struct dz_click_event {
-	int row = ROW_D;     // row to print delta
-	int64_t time_ms = 0; // absolute ms
+	int row = ROW_D;     // linha para exibir o delta
+	int64_t time_ms = 0; // ms absoluto
 	int delta_ms = 0;    // >= 0
 };
 
 struct dz_input_state {
-	std::atomic<uint8_t> key_w{0}, key_a{0}, key_s{0}, key_d{0};
+	std::atomic<uint8_t> key_down[ROW_COUNT]{{0}, {0}, {0}, {0}};
 	std::atomic<uint8_t> m1{0}, m2{0}, m3{0};
 
 	std::atomic<int> last_dx{0};
@@ -62,16 +64,17 @@ struct dz_input_state {
 };
 
 struct dz_source_data {
-	// Source size
+	// Tamanho da fonte
 	uint32_t width = 1500;
 	uint32_t height = 520;
 
-	// Visual config
+	// Configuração visual
 	float bg_alpha = 0.55f;
 	bool row_enabled[ROW_COUNT] = {true, true, true, true};
+	uint16_t row_key_vkey[ROW_COUNT] = {'W', 'S', 'A', 'D'};
 
-	// Colors (OBS color picker gives BGR: 0x00BBGGRR)
-	uint32_t bg_color = 0x000000; // background RGB in OBS BGR encoding (default black)
+	// Cores (o seletor do OBS retorna BGR: 0x00BBGGRR)
+	uint32_t bg_color = 0x000000; // RGB do fundo em BGR do OBS (padrão preto)
 	uint32_t key_color[ROW_COUNT] = {
 		0x005dc8f3, // W: #f3c85d
 		0x009cff9c, // S: #9cff9c
@@ -79,43 +82,124 @@ struct dz_source_data {
 		0x00c8a00a  // D: #0aa0c8
 	};
 
-	// OBS effect
+	// Efeito do OBS
 	gs_effect_t *solid = nullptr;
 
-	// RawInput window
+	// Janela de entrada bruta
 	HWND hwnd = nullptr;
 
-	// Input state (raw)
+	// Estado de entrada (bruta)
 	dz_input_state st;
 
-	// Timeline storage
+	// Armazenamento da linha do tempo
 	std::deque<dz_key_segment> segments;
 	std::deque<dz_click_event> clicks;
 
-	// movv.html behavior: store "last keydown" (row + time)
+	// Comportamento do movv.html: guarda a "última tecla pressionada" (linha + tempo)
 	std::atomic<int> last_key_row{ROW_D};
 	std::atomic<int64_t> last_key_down_ms{0};
 	std::atomic<int> last_key_valid{0};
 
-	// bookkeeping
+	// Controle interno
 	uint64_t frame_counter = 0;
 };
 
-static inline int vkey_to_row(uint16_t vkey)
+static inline int vkey_to_row(const dz_source_data *d, uint16_t vkey)
 {
-	if (vkey == 'W')
-		return ROW_W;
-	if (vkey == 'S')
-		return ROW_S;
-	if (vkey == 'A')
-		return ROW_A;
-	if (vkey == 'D')
-		return ROW_D;
+	if (!d)
+		return -1;
+	for (int i = 0; i < ROW_COUNT; i++) {
+		if (d->row_key_vkey[i] == vkey)
+			return i;
+	}
 	return -1;
 }
 
+struct dz_key_option {
+	uint16_t vkey;
+	const char *nome;
+};
+
+static const dz_key_option kKeyOptions[] = {
+	{'A', "A"},
+	{'B', "B"},
+	{'C', "C"},
+	{'D', "D"},
+	{'E', "E"},
+	{'F', "F"},
+	{'G', "G"},
+	{'H', "H"},
+	{'I', "I"},
+	{'J', "J"},
+	{'K', "K"},
+	{'L', "L"},
+	{'M', "M"},
+	{'N', "N"},
+	{'O', "O"},
+	{'P', "P"},
+	{'Q', "Q"},
+	{'R', "R"},
+	{'S', "S"},
+	{'T', "T"},
+	{'U', "U"},
+	{'V', "V"},
+	{'W', "W"},
+	{'X', "X"},
+	{'Y', "Y"},
+	{'Z', "Z"},
+	{'0', "0"},
+	{'1', "1"},
+	{'2', "2"},
+	{'3', "3"},
+	{'4', "4"},
+	{'5', "5"},
+	{'6', "6"},
+	{'7', "7"},
+	{'8', "8"},
+	{'9', "9"},
+	{VK_LEFT, "SETA ESQUERDA"},
+	{VK_RIGHT, "SETA DIREITA"},
+	{VK_UP, "SETA CIMA"},
+	{VK_DOWN, "SETA BAIXO"},
+	{VK_SPACE, "ESPACO"},
+	{VK_RETURN, "ENTRAR"},
+	{VK_TAB, "TAB"},
+	{VK_ESCAPE, "ESC"},
+	{VK_SHIFT, "MAIUSC"},
+	{VK_CONTROL, "CTRL"},
+	{VK_MENU, "ALT"},
+	{VK_F1, "F1"},
+	{VK_F2, "F2"},
+	{VK_F3, "F3"},
+	{VK_F4, "F4"},
+	{VK_F5, "F5"},
+	{VK_F6, "F6"},
+	{VK_F7, "F7"},
+	{VK_F8, "F8"},
+	{VK_F9, "F9"},
+	{VK_F10, "F10"},
+	{VK_F11, "F11"},
+	{VK_F12, "F12"},
+};
+
+static const char *dz_nome_tecla(uint16_t vkey)
+{
+	for (const auto &opt : kKeyOptions) {
+		if (opt.vkey == vkey)
+			return opt.nome;
+	}
+	return "DESCONHECIDA";
+}
+
+static std::string dz_titulo_tecla(uint16_t vkey)
+{
+	std::string titulo = "Tecla ";
+	titulo += dz_nome_tecla(vkey);
+	return titulo;
+}
+
 // ------------------------------------------------------------
-// Hidden window + RawInput
+// Janela oculta + entrada bruta
 static LRESULT CALLBACK dz_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
 	if (msg == WM_NCCREATE) {
@@ -162,11 +246,11 @@ static LRESULT CALLBACK dz_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
 			USHORT bf = m.usButtonFlags;
 
-			// Buttons
+			// Botões
 			if (bf & RI_MOUSE_BUTTON_1_DOWN) {
 				d->st.m1.store(1, std::memory_order_relaxed);
 
-				// movv.html: left click creates marker and delta from last keydown
+				// movv.html: clique esquerdo cria marcador e delta da última tecla pressionada
 				const int64_t t = now_ms();
 
 				int row = ROW_D;
@@ -198,35 +282,22 @@ static LRESULT CALLBACK dz_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 			const bool is_break = (k.Flags & RI_KEY_BREAK) != 0;
 			const uint16_t vkey = (uint16_t)k.VKey;
 
-			auto set_key = [&](std::atomic<uint8_t> &dst) {
-				dst.store(is_break ? 0 : 1, std::memory_order_relaxed);
-			};
+			const int row = vkey_to_row(d, vkey);
+			bool was_down = false;
+			if (row != -1) {
+				was_down = d->st.key_down[row].load(std::memory_order_relaxed) != 0;
+				d->st.key_down[row].store(is_break ? 0 : 1, std::memory_order_relaxed);
+			}
 
-			if (vkey == 'W')
-				set_key(d->st.key_w);
-			else if (vkey == 'A')
-				set_key(d->st.key_a);
-			else if (vkey == 'S')
-				set_key(d->st.key_s);
-			else if (vkey == 'D')
-				set_key(d->st.key_d);
-
-			// Timeline segments: only WASD
-			const int row = vkey_to_row(vkey);
+			// Segmentos da linha do tempo: apenas as 4 teclas configuradas
 			if (row != -1) {
 				const int64_t t = now_ms();
 
 				if (!is_break) {
-					// keydown (ignore repeats by checking if already pressed)
-					bool already = (row == ROW_W && d->st.key_w.load(std::memory_order_relaxed)) ||
-						       (row == ROW_S && d->st.key_s.load(std::memory_order_relaxed)) ||
-						       (row == ROW_A && d->st.key_a.load(std::memory_order_relaxed)) ||
-						       (row == ROW_D && d->st.key_d.load(std::memory_order_relaxed));
+					// pressionar tecla (ignorar repetição quando já está pressionada)
+					bool already = was_down;
 
-					// Note: above check happens after set_key, so already is "pressed now".
-					// We want to avoid repeat. If it was already pressed before WM_INPUT, we can't know here,
-					// but RawInput typically does not spam like Win32 key repeat. Still, we can be conservative:
-					// start a segment only if we don't have an open segment for this row.
+					// Inicia um segmento apenas se não houver um aberto para essa linha.
 					bool has_open = false;
 					for (auto it = d->segments.rbegin(); it != d->segments.rend(); ++it) {
 						if (it->row == row && it->end_ms < 0) {
@@ -234,14 +305,14 @@ static LRESULT CALLBACK dz_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 							break;
 						}
 					}
-					if (!has_open) {
+					if (!already && !has_open) {
 						d->segments.push_back({row, t, -1});
 						d->last_key_row.store(row, std::memory_order_relaxed);
 						d->last_key_down_ms.store(t, std::memory_order_relaxed);
 						d->last_key_valid.store(1, std::memory_order_relaxed);
 					}
 				} else {
-					// keyup: close latest open segment for that row
+					// soltar tecla: fecha o último segmento aberto dessa linha
 					for (auto it = d->segments.rbegin(); it != d->segments.rend(); ++it) {
 						if (it->row == row && it->end_ms < 0) {
 							it->end_ms = t;
@@ -293,7 +364,7 @@ static HWND dz_create_hidden_window(dz_source_data *d)
 		RegisterClassExW(&wc);
 	}
 
-	HWND hwnd = CreateWindowExW(0, kWndClass, L"DZ Input Analyzer Hidden", WS_OVERLAPPEDWINDOW, 0, 0, 100, 100,
+	HWND hwnd = CreateWindowExW(0, kWndClass, L"DZ Analisador de Entrada Oculto", WS_OVERLAPPEDWINDOW, 0, 0, 100, 100,
 				    nullptr, nullptr, GetModuleHandleW(nullptr), d);
 
 	if (!hwnd)
@@ -309,7 +380,7 @@ static HWND dz_create_hidden_window(dz_source_data *d)
 }
 
 // ------------------------------------------------------------
-// Drawing helpers (solid effect)
+// Auxiliares de desenho (efeito sólido)
 static void dz_draw_rect(gs_effect_t *solid, float x, float y, float w, float h, const vec4 &c)
 {
 	gs_eparam_t *p = gs_effect_get_param_by_name(solid, "color");
@@ -328,26 +399,114 @@ static void dz_draw_rect(gs_effect_t *solid, float x, float y, float w, float h,
 	gs_matrix_pop();
 }
 
-// Minimal bitmap font (5x7) for: W S A D 0..9 's'
+// Fonte bitmap mínima (5x7) para letras e números
 static uint8_t glyph_5x7(char ch, int row)
 {
-	// Each glyph: 7 rows of 5 bits (MSB left)
-	// Return bitmask for given row (0..6), bits in 0..4.
+	// Cada glifo: 7 linhas de 5 bits (bit mais significativo à esquerda)
+	// Retorna a máscara da linha (0..6), bits em 0..4.
 	switch (ch) {
-	case 'W': {
-		static const uint8_t g[7] = {0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010};
+	case 'A': {
+		static const uint8_t g[7] = {0b00100, 0b01010, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001};
+		return g[row];
+	}
+	case 'B': {
+		static const uint8_t g[7] = {0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110};
+		return g[row];
+	}
+	case 'C': {
+		static const uint8_t g[7] = {0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110};
+		return g[row];
+	}
+	case 'D': {
+		static const uint8_t g[7] = {0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110};
+		return g[row];
+	}
+	case 'E': {
+		static const uint8_t g[7] = {0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111};
+		return g[row];
+	}
+	case 'F': {
+		static const uint8_t g[7] = {0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000};
+		return g[row];
+	}
+	case 'G': {
+		static const uint8_t g[7] = {0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110};
+		return g[row];
+	}
+	case 'H': {
+		static const uint8_t g[7] = {0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001};
+		return g[row];
+	}
+	case 'I': {
+		static const uint8_t g[7] = {0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110};
+		return g[row];
+	}
+	case 'J': {
+		static const uint8_t g[7] = {0b00111, 0b00010, 0b00010, 0b00010, 0b10010, 0b10010, 0b01100};
+		return g[row];
+	}
+	case 'K': {
+		static const uint8_t g[7] = {0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001};
+		return g[row];
+	}
+	case 'L': {
+		static const uint8_t g[7] = {0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111};
+		return g[row];
+	}
+	case 'M': {
+		static const uint8_t g[7] = {0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001};
+		return g[row];
+	}
+	case 'N': {
+		static const uint8_t g[7] = {0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001};
+		return g[row];
+	}
+	case 'O': {
+		static const uint8_t g[7] = {0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110};
+		return g[row];
+	}
+	case 'P': {
+		static const uint8_t g[7] = {0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000};
+		return g[row];
+	}
+	case 'Q': {
+		static const uint8_t g[7] = {0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101};
+		return g[row];
+	}
+	case 'R': {
+		static const uint8_t g[7] = {0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001};
 		return g[row];
 	}
 	case 'S': {
 		static const uint8_t g[7] = {0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110};
 		return g[row];
 	}
-	case 'A': {
-		static const uint8_t g[7] = {0b00100, 0b01010, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001};
+	case 'T': {
+		static const uint8_t g[7] = {0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100};
 		return g[row];
 	}
-	case 'D': {
-		static const uint8_t g[7] = {0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110};
+	case 'U': {
+		static const uint8_t g[7] = {0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110};
+		return g[row];
+	}
+	case 'V': {
+		static const uint8_t g[7] = {0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100};
+		return g[row];
+	}
+	case 'W': {
+		static const uint8_t g[7] = {0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010};
+		return g[row];
+	}
+	case 'X': {
+		static const uint8_t g[7] = {0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001};
+		return g[row];
+	}
+	case 'Y': {
+		static const uint8_t g[7] = {0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100};
+		return g[row];
+	}
+	case 'Z': {
+		static const uint8_t g[7] = {0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111};
 		return g[row];
 	}
 	case '0': {
@@ -391,10 +550,6 @@ static uint8_t glyph_5x7(char ch, int row)
 		static const uint8_t g[7] = {0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110};
 		return g[row];
 	}
-case 's': {
-		static const uint8_t g[7] = {0b00000, 0b00000, 0b01111, 0b10000, 0b01110, 0b00001, 0b11110};
-		return g[row];
-	}
 	default:
 		return 0;
 	}
@@ -424,16 +579,54 @@ static void dz_draw_text_5x7(gs_effect_t *solid, float x, float y, const char *t
 				}
 			}
 		}
-		pen_x += 6.0f * cell; // 5 + 1 space
+		pen_x += 6.0f * cell; // 5 + 1 espaço
 	}
 }
 
 // ------------------------------------------------------------
-// OBS source
+// Fonte OBS
+static uint16_t dz_obter_vkey(obs_data_t *settings, const char *nome, uint16_t padrao)
+{
+	const int valor = (int)obs_data_get_int(settings, nome);
+	return valor != 0 ? (uint16_t)valor : padrao;
+}
+
+static void dz_preencher_lista_teclas(obs_property_t *list)
+{
+	for (const auto &opt : kKeyOptions)
+		obs_property_list_add_int(list, opt.nome, opt.vkey);
+}
+
+static bool dz_ao_modificar_tecla(obs_properties_t *props, obs_property_t *property, obs_data_t *settings)
+{
+	const char *prop_name = obs_property_name(property);
+	const uint16_t vkey = (uint16_t)obs_data_get_int(settings, prop_name);
+	const char *grupo_id = nullptr;
+
+	if (strcmp(prop_name, "row_w_key") == 0)
+		grupo_id = "row_w_group";
+	else if (strcmp(prop_name, "row_s_key") == 0)
+		grupo_id = "row_s_group";
+	else if (strcmp(prop_name, "row_a_key") == 0)
+		grupo_id = "row_a_group";
+	else if (strcmp(prop_name, "row_d_key") == 0)
+		grupo_id = "row_d_group";
+
+	if (!grupo_id)
+		return true;
+
+	obs_property_t *grupo = obs_properties_get(props, grupo_id);
+	if (!grupo)
+		return true;
+
+	std::string titulo = dz_titulo_tecla(vkey);
+	obs_property_set_description(grupo, titulo.c_str());
+	return true;
+}
 static const char *dz_source_get_name(void *unused)
 {
 	UNUSED_PARAMETER(unused);
-	return "DZ Input Analyzer";
+	return "Analisador de Entrada DZ";
 }
 
 static void *dz_source_create(obs_data_t *settings, obs_source_t *source)
@@ -457,6 +650,10 @@ static void *dz_source_create(obs_data_t *settings, obs_source_t *source)
 	d->key_color[ROW_S] = (uint32_t)obs_data_get_int(settings, "color_s");
 	d->key_color[ROW_A] = (uint32_t)obs_data_get_int(settings, "color_a");
 	d->key_color[ROW_D] = (uint32_t)obs_data_get_int(settings, "color_d");
+	d->row_key_vkey[ROW_W] = dz_obter_vkey(settings, "row_w_key", 'W');
+	d->row_key_vkey[ROW_S] = dz_obter_vkey(settings, "row_s_key", 'S');
+	d->row_key_vkey[ROW_A] = dz_obter_vkey(settings, "row_a_key", 'A');
+	d->row_key_vkey[ROW_D] = dz_obter_vkey(settings, "row_d_key", 'D');
 	d->row_enabled[ROW_W] = obs_data_get_bool(settings, "row_w_enabled");
 	d->row_enabled[ROW_S] = obs_data_get_bool(settings, "row_s_enabled");
 	d->row_enabled[ROW_A] = obs_data_get_bool(settings, "row_a_enabled");
@@ -468,7 +665,7 @@ static void *dz_source_create(obs_data_t *settings, obs_source_t *source)
 
 	d->hwnd = dz_create_hidden_window(d);
 
-	blog(LOG_INFO, "[dz-input-analyzer] create: %ux%u solid=%p hwnd=%p", d->width, d->height, d->solid, d->hwnd);
+	blog(LOG_INFO, "[dz-input-analyzer] criar: %ux%u solido=%p hwnd=%p", d->width, d->height, d->solid, d->hwnd);
 	return d;
 }
 
@@ -478,7 +675,7 @@ static void dz_source_destroy(void *data)
 	if (!d)
 		return;
 
-	blog(LOG_INFO, "[dz-input-analyzer] destroy");
+	blog(LOG_INFO, "[dz-input-analyzer] destruir");
 
 	if (d->hwnd) {
 		DestroyWindow(d->hwnd);
@@ -506,18 +703,23 @@ static uint32_t dz_source_get_height(void *data)
 
 static void dz_source_defaults(obs_data_t *settings)
 {
-	// Keep in sync with dz_source_data defaults
+	// Manter em sincronia com os padrões de dz_source_data
 	obs_data_set_default_int(settings, "width", 1500);
 	obs_data_set_default_int(settings, "height", 520);
 
 	obs_data_set_default_double(settings, "bg_alpha", 0.55);
 
-	// Colors are COLORREF (BGR): 0x00BBGGRR
+	// Cores são COLORREF (BGR): 0x00BBGGRR
 	obs_data_set_default_int(settings, "bg_color", 0x000000);
 	obs_data_set_default_int(settings, "color_w", 0x005dc8f3); // #f3c85d
 	obs_data_set_default_int(settings, "color_s", 0x009cff9c); // #9cff9c
 	obs_data_set_default_int(settings, "color_a", 0x003f3fcf); // #cf3f3f
 	obs_data_set_default_int(settings, "color_d", 0x00c8a00a); // #0aa0c8
+
+	obs_data_set_default_int(settings, "row_w_key", 'W');
+	obs_data_set_default_int(settings, "row_s_key", 'S');
+	obs_data_set_default_int(settings, "row_a_key", 'A');
+	obs_data_set_default_int(settings, "row_d_key", 'D');
 
 	obs_data_set_default_bool(settings, "row_w_enabled", true);
 	obs_data_set_default_bool(settings, "row_s_enabled", true);
@@ -527,23 +729,62 @@ static void dz_source_defaults(obs_data_t *settings)
 
 static obs_properties_t *dz_source_properties(void *data)
 {
-	UNUSED_PARAMETER(data);
-
+	auto *d = (dz_source_data *)data;
 	obs_properties_t *p = obs_properties_create();
-	obs_properties_add_int(p, "width", "Width", 16, 16384, 1);
-	obs_properties_add_int(p, "height", "Height", 16, 16384, 1);
-	obs_properties_add_float_slider(p, "bg_alpha", "Background Opacity", 0.0, 1.0, 0.01);
+	obs_properties_add_int(p, "width", "Largura", 16, 16384, 1);
+	obs_properties_add_int(p, "height", "Altura", 16, 16384, 1);
+	obs_properties_add_float_slider(p, "bg_alpha", "Opacidade do fundo", 0.0, 1.0, 0.01);
 
-	obs_properties_add_color(p, "bg_color", "Background Color");
-	obs_properties_add_color(p, "color_w", "Color W");
-	obs_properties_add_color(p, "color_s", "Color S");
-	obs_properties_add_color(p, "color_a", "Color A");
-	obs_properties_add_color(p, "color_d", "Color D");
+	obs_properties_add_color(p, "bg_color", "Cor do fundo");
 
-	obs_properties_add_bool(p, "row_w_enabled", "Mostrar row W");
-	obs_properties_add_bool(p, "row_s_enabled", "Mostrar row S");
-	obs_properties_add_bool(p, "row_a_enabled", "Mostrar row A");
-	obs_properties_add_bool(p, "row_d_enabled", "Mostrar row D");
+	const uint16_t vkey_w = d ? d->row_key_vkey[ROW_W] : (uint16_t)'W';
+	const uint16_t vkey_s = d ? d->row_key_vkey[ROW_S] : (uint16_t)'S';
+	const uint16_t vkey_a = d ? d->row_key_vkey[ROW_A] : (uint16_t)'A';
+	const uint16_t vkey_d = d ? d->row_key_vkey[ROW_D] : (uint16_t)'D';
+
+	{
+		obs_properties_t *grupo = obs_properties_create();
+		obs_property_t *lista = obs_properties_add_list(grupo, "row_w_key", "Tecla monitorada",
+								OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+		dz_preencher_lista_teclas(lista);
+		obs_property_set_modified_callback(lista, dz_ao_modificar_tecla);
+		obs_properties_add_color(grupo, "color_w", "Cor da linha");
+		obs_properties_add_bool(grupo, "row_w_enabled", "Mostrar linha");
+		obs_properties_add_group(p, "row_w_group", dz_titulo_tecla(vkey_w).c_str(), OBS_GROUP_NORMAL, grupo);
+	}
+
+	{
+		obs_properties_t *grupo = obs_properties_create();
+		obs_property_t *lista = obs_properties_add_list(grupo, "row_s_key", "Tecla monitorada",
+								OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+		dz_preencher_lista_teclas(lista);
+		obs_property_set_modified_callback(lista, dz_ao_modificar_tecla);
+		obs_properties_add_color(grupo, "color_s", "Cor da linha");
+		obs_properties_add_bool(grupo, "row_s_enabled", "Mostrar linha");
+		obs_properties_add_group(p, "row_s_group", dz_titulo_tecla(vkey_s).c_str(), OBS_GROUP_NORMAL, grupo);
+	}
+
+	{
+		obs_properties_t *grupo = obs_properties_create();
+		obs_property_t *lista = obs_properties_add_list(grupo, "row_a_key", "Tecla monitorada",
+								OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+		dz_preencher_lista_teclas(lista);
+		obs_property_set_modified_callback(lista, dz_ao_modificar_tecla);
+		obs_properties_add_color(grupo, "color_a", "Cor da linha");
+		obs_properties_add_bool(grupo, "row_a_enabled", "Mostrar linha");
+		obs_properties_add_group(p, "row_a_group", dz_titulo_tecla(vkey_a).c_str(), OBS_GROUP_NORMAL, grupo);
+	}
+
+	{
+		obs_properties_t *grupo = obs_properties_create();
+		obs_property_t *lista = obs_properties_add_list(grupo, "row_d_key", "Tecla monitorada",
+								OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+		dz_preencher_lista_teclas(lista);
+		obs_property_set_modified_callback(lista, dz_ao_modificar_tecla);
+		obs_properties_add_color(grupo, "color_d", "Cor da linha");
+		obs_properties_add_bool(grupo, "row_d_enabled", "Mostrar linha");
+		obs_properties_add_group(p, "row_d_group", dz_titulo_tecla(vkey_d).c_str(), OBS_GROUP_NORMAL, grupo);
+	}
 	return p;
 }
 
@@ -569,12 +810,20 @@ static void dz_source_update(void *data, obs_data_t *settings)
 	d->key_color[ROW_A] = (uint32_t)obs_data_get_int(settings, "color_a");
 	d->key_color[ROW_D] = (uint32_t)obs_data_get_int(settings, "color_d");
 
+	d->row_key_vkey[ROW_W] = dz_obter_vkey(settings, "row_w_key", 'W');
+	d->row_key_vkey[ROW_S] = dz_obter_vkey(settings, "row_s_key", 'S');
+	d->row_key_vkey[ROW_A] = dz_obter_vkey(settings, "row_a_key", 'A');
+	d->row_key_vkey[ROW_D] = dz_obter_vkey(settings, "row_d_key", 'D');
+
 	d->row_enabled[ROW_W] = obs_data_get_bool(settings, "row_w_enabled");
 	d->row_enabled[ROW_S] = obs_data_get_bool(settings, "row_s_enabled");
 	d->row_enabled[ROW_A] = obs_data_get_bool(settings, "row_a_enabled");
 	d->row_enabled[ROW_D] = obs_data_get_bool(settings, "row_d_enabled");
 
-	blog(LOG_INFO, "[dz-input-analyzer] update: %ux%u bg_alpha=%.2f bg_color=%06x W=%06x S=%06x A=%06x D=%06x",
+	for (int i = 0; i < ROW_COUNT; i++)
+		d->st.key_down[i].store(0, std::memory_order_relaxed);
+
+	blog(LOG_INFO, "[dz-input-analyzer] atualizar: %ux%u opacidade=%.2f cor_fundo=%06x W=%06x S=%06x A=%06x D=%06x",
 		d->width, d->height, d->bg_alpha,
 		(unsigned)(d->bg_color & 0xFFFFFF),
 		(unsigned)(d->key_color[ROW_W] & 0xFFFFFF),
@@ -583,7 +832,7 @@ static void dz_source_update(void *data, obs_data_t *settings)
 		(unsigned)(d->key_color[ROW_D] & 0xFFFFFF));
 }
 
-// Colors from movv.html
+// Cores do movv.html
 static vec4 dz_col_rgba(float r, float g, float b, float a)
 {
 	vec4 c;
@@ -591,7 +840,7 @@ static vec4 dz_col_rgba(float r, float g, float b, float a)
 	return c;
 }
 
-// OBS color property uses Windows COLORREF (BGR): 0x00BBGGRR
+// A propriedade de cor do OBS usa COLORREF do Windows (BGR): 0x00BBGGRR
 static inline vec4 dz_col_from_obs_bgr(uint32_t bgr, float a)
 {
 	const float r = (float)((bgr) & 0xFF) / 255.0f;
@@ -609,7 +858,7 @@ static vec4 row_color(const dz_source_data *d, int row, float a)
 	return dz_col_from_obs_bgr(d->key_color[idx], a);
 }
 
-// Keep only last 30s like movv.html
+// Mantém somente os últimos 30s, como no movv.html
 static void dz_cleanup_history(dz_source_data *d, int64_t t_now_ms)
 {
 	const int64_t keep_after = t_now_ms - 30000;
@@ -644,16 +893,16 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 	gs_reset_blend_state();
 	gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
 
-	// IMPORTANT:
-	// Do not override viewport/projection here.
-	// Let OBS handle all transforms (move/scale/rotate) so the drawn content
-	// stays locked to the Source Bounding Box.
+	// IMPORTANTE:
+	// Não sobrescreva viewport/projeção aqui.
+	// Deixe o OBS controlar todas as transformações (mover/escalar/rotacionar)
+	// para manter o conteúdo preso ao retângulo da fonte.
 
-	// Background (simple tint)
+	// Fundo (cor simples)
 	vec4 bg = dz_col_from_obs_bgr(d->bg_color, d->bg_alpha);
 	dz_draw_rect(solid, 0.0f, 0.0f, W, H, bg);
 
-	// Layout copied from movv.html draw()
+	// Layout copiado do draw() do movv.html
 	const float leftPad = 70.0f;
 	const float rightPad = 20.0f;
 	const float topPad = 18.0f;
@@ -689,7 +938,7 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 		}
 	}
 
-	// Time window (moving)
+	// Janela de tempo (móvel)
 	const int64_t tNow = now_ms();
 	const int64_t WINDOW_MS = 5000;
 	const int64_t t0 = tNow - WINDOW_MS;
@@ -707,10 +956,10 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 		return std::max(a, std::min(b, v));
 	};
 
-	// Grid vertical lines at 0..5s
+	// Linhas verticais da grade em 0..5s
 	vec4 grid = dz_col_rgba(0.160784f, 0.160784f, 0.160784f, 1.0f); // #292929
 	const float axisY = H - bottomPad + 22.0f;
-	const float axisY2 = axisY + 2.0f; // baseline thickness
+	const float axisY2 = axisY + 2.0f; // espessura da base
 	for (int i = 0; i <= 5; i++) {
 		const float x = timelineX0 + ((float)i * 1000.0f / (float)WINDOW_MS) * timelineW;
 		const float y0 = topPad - 6.0f;
@@ -719,23 +968,28 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 	}
 
 	
-// Row labels (W/S/A/D) big-ish using bitmap font
+	// Rótulos das linhas usando fonte bitmap
 	if (visible_rows > 0) {
 		vec4 text = dz_col_rgba(1.0f, 1.0f, 1.0f, 0.92f);
-		const float scale = 6.0f; // tweakable
-		const char *labels[ROW_COUNT] = {"W", "S", "A", "D"};
 		for (int i = 0; i < ROW_COUNT; i++) {
 			if (!d->row_enabled[i])
 				continue;
+			const char *label = dz_nome_tecla(d->row_key_vkey[i]);
+			const size_t label_len = strlen(label);
+			float scale = 4.0f;
+			if (label_len > 10)
+				scale = 3.0f;
+			if (label_len > 16)
+				scale = 2.0f;
 			const float yMid = rowYs[i] + rowH * 0.5f;
-			// Center the 5x7 block vertically around yMid
+			// Centraliza o bloco 5x7 verticalmente em yMid
 			const float glyphH = 7.0f * std::floor(scale);
 			const float y = yMid - glyphH * 0.5f;
-			dz_draw_text_5x7(solid, 22.0f, y, labels[i], scale, text);
+			dz_draw_text_5x7(solid, 22.0f, y, label, scale, text);
 		}
 	}
 
-	// Key segments (height 60% of rowH, sharp corners)
+	// Segmentos da tecla (altura 60% de rowH, cantos retos)
 	if (visible_rows > 0) {
 		for (const auto &seg : d->segments) {
 			if (!d->row_enabled[seg.row])
@@ -757,7 +1011,7 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 		}
 	}
 
-	// Click markers + delta numbers
+	// Marcadores de clique + números de delta
 	if (visible_rows > 0) {
 		for (const auto &c : d->clicks) {
 			if (!d->row_enabled[c.row])
@@ -767,16 +1021,16 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 
 			const float x = xOf(c.time_ms);
 
-			// Color + height are driven by the last key pressed before the click (c.row).
-			// One variable controls both the click line and the delta number color.
+			// Cor e altura são definidos pela última tecla pressionada antes do clique (c.row).
+			// Uma variável controla tanto a linha do clique quanto a cor do número de delta.
 			vec4 clickCol = row_color(d, c.row, 0.90f);
 
-			// Click line: starts at the TOP of the row of the last key, ends at the baseline.
+			// Linha do clique: começa no TOPO da linha da última tecla e termina na base.
 			const float y0 = rowYs[c.row];
 			const float h = std::max(2.0f, axisY2 - y0);
 			dz_draw_rect(solid, x, y0, 2.0f, h, clickCol);
 
-			// Number near the row (same color as the click line)
+			// Número próximo da linha (mesma cor da linha do clique)
 			const float scale = 3.0f;
 
 			char buf[16]{};
@@ -787,18 +1041,18 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 		}
 	}
 
-	// TIME axis line + ticks + labels 0s..5s
+	// Linha do eixo de TEMPO + marcas + rótulos 0s..5s
 	{
 		const float axisY = H - bottomPad + 22.0f;
 
-		// Axis baseline: #292929
+		// Linha base do eixo: #292929
 		vec4 axis = dz_col_rgba(0.1608f, 0.1608f, 0.1608f, 1.0f);
 		dz_draw_rect(solid, timelineX0, axisY, timelineW, 2.0f, axis);
 
-		// Tick/grid color: #292929 (only the 6 vertical lines)
+		// Cor das marcas/grade: #292929 (somente 6 linhas verticais)
 		vec4 grid = dz_col_rgba(0.1608f, 0.1608f, 0.1608f, 1.0f);
 
-		// Tick label color (0s..5s)
+		// Cor dos rótulos (0s..5s)
 		vec4 tcol = dz_col_rgba(0.1608f, 0.1608f, 0.1608f, 1.0f);
 
 		for (int i = 0; i <= 5; i++) {
@@ -807,7 +1061,7 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 
 			char lab[4]{};
 			lab[0] = (char)('0' + i);
-			lab[1] = 's';
+			lab[1] = 'S';
 			lab[2] = 0;
 
 			dz_draw_text_5x7(solid, x - 10.0f, axisY + 10.0f, lab, 2.28f, tcol);
@@ -815,10 +1069,10 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 	}
 
 
-	// Cleanup history like movv.html (keep 30s)
+	// Limpeza do histórico como no movv.html (mantém 30s)
 	dz_cleanup_history(d, tNow);
 
-	// OBS handles viewport/projection.
+	// O OBS controla viewport/projeção.
 }
 
 static obs_source_info dz_source_info;
@@ -843,11 +1097,11 @@ bool obs_module_load(void)
 	dz_source_info.video_render = dz_source_render;
 
 	obs_register_source(&dz_source_info);
-	blog(LOG_INFO, "[dz-input-analyzer] source registered (timeline)");
+	blog(LOG_INFO, "[dz-input-analyzer] fonte registrada (linha do tempo)");
 	return true;
 }
 
 const char *obs_module_name(void)
 {
-	return "DZ Input Analyzer";
+	return "Analisador de Entrada DZ";
 }
