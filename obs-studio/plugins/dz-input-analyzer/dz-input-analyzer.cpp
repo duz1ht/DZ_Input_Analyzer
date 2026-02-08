@@ -1,5 +1,8 @@
 // plugins/dz-input-analyzer/dz-input-analyzer.cpp
 #include <obs-module.h>
+
+#undef LIBOBS_API_VER
+#define LIBOBS_API_VER obs_get_version()
 #include <graphics/graphics.h>
 #include <graphics/vec4.h>
 
