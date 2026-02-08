@@ -115,6 +115,8 @@ static inline int vkey_to_row(const dz_source_data *d, uint16_t vkey)
 	return -1;
 }
 
+static float dz_visible_height(const dz_source_data *d);
+
 struct dz_key_option {
 	uint16_t vkey;
 	const char *name;
