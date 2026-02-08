@@ -1076,7 +1076,7 @@ static void dz_source_render(void *data, gs_effect_t *effect)
 		float x1s = clampf(xOf(end), timelineX0, timelineX1);
 
 		float w = std::max(2.0f, x1s - x0s);
-			float h = std::max(2.0f, std::round(rowH * 0.25875f));
+			float h = std::max(2.0f, std::round(rowH * 0.2975625f));
 		float y = rowYs[seg.row] + std::round((rowH - h) * 0.5f);
 
 			vec4 c = row_color(d, seg.row, 0.95f);
